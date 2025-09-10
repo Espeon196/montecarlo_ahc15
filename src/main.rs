@@ -59,21 +59,21 @@ const H: usize = 10;
 const W: usize = 10;
 const END_TURN: i64 = 100;
 
-static FUTURE_CANDIES: Lazy<Mutex<[u8; END_TURN as usize]>> = Lazy::new(|| Mutex::new([0u8; END_TURN as usize]));
-static RAND_FOR_ACTION: Lazy<Mutex<StdRng>> = Lazy::new(|| {
+pub static FUTURE_CANDIES: Lazy<Mutex<[u8; END_TURN as usize]>> = Lazy::new(|| Mutex::new([0u8; END_TURN as usize]));
+pub static RAND_FOR_ACTION: Lazy<Mutex<StdRng>> = Lazy::new(|| {
     Mutex::new(StdRng::seed_from_u64(80))
 });
 
 
 #[derive(Clone, Copy)]
-enum Action {
+pub enum Action {
     Forward,
     Back,
     Left,
     Right,
 }
 
-fn action_to_char(action: Action) -> char {
+pub fn action_to_char(action: Action) -> char {
     match action {
         Action::Forward => 'F',
         Action::Back => 'B',
@@ -83,21 +83,21 @@ fn action_to_char(action: Action) -> char {
 }
 
 #[derive(Clone)]
-struct State {
+pub struct State {
     board: [[u8; W]; H],
     turn: i64,
 }
 
 impl State {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self { board: [[0u8; W]; H], turn: 0i64 }
     }
 
-    fn is_done(&self) -> bool {
+    pub fn is_done(&self) -> bool {
         self.turn >= END_TURN
     }
 
-    fn advance(&mut self, action: Action) {
+    pub fn advance(&mut self, action: Action) {
         match action {
             Action::Forward => {
                 for x in 0..W {
@@ -151,13 +151,13 @@ impl State {
         self.turn += 1;
     }
 
-    fn random_update(&mut self) {
+    pub fn random_update(&mut self) {
         let remain_turn = END_TURN - self.turn;
         let p = RAND_FOR_ACTION.lock().unwrap().gen_range(1..=remain_turn);
         self.update(p);
     }
 
-    fn update(&mut self, pt: i64) {
+    pub fn update(&mut self, pt: i64) {
         let mut cnt = 0i64;
         let candies = FUTURE_CANDIES.lock().unwrap();
         for y in 0..H {
@@ -202,7 +202,7 @@ impl State {
         cnt
     }
 
-    fn get_score(&self) -> f64 {
+    pub fn get_score(&self) -> f64 {
         let mut score = 0.;
         let mut checked = [[false; W]; H];
         for y in 0..H {
@@ -217,42 +217,64 @@ impl State {
     }
 }
 
-const LEGAL_ACTIONS: [Action; 4] = [Action::Forward, Action::Back, Action::Left, Action::Right];
+pub const LEGAL_ACTIONS: [Action; 4] = [Action::Forward, Action::Back, Action::Left, Action::Right];
 
-fn random_action(_state: &State) -> Action {
+pub fn random_action(_state: &State) -> Action {
     let random_idx = RAND_FOR_ACTION.lock().unwrap().gen_range(0..LEGAL_ACTIONS.len());
     LEGAL_ACTIONS[random_idx]
 }
 
-fn playout(state: &mut State) -> f64 {
-    while !state.is_done() {
-        state.random_update();
-        state.advance(random_action(state));
+pub fn rulebase_action(state: &State) -> Action {
+    let rule = [
+        [Action::Forward, Action::Back, Action::Back],
+        [Action::Forward, Action::Left, Action::Right],
+        [Action::Forward, Action::Left, Action::Right],
+    ];
+    let candies = FUTURE_CANDIES.lock().unwrap();
+    let turn = state.turn;
+    if turn >= END_TURN - 1 {
+        return Action::Forward;
     }
-    state.get_score()
+    let now_candy_idx = candies[state.turn as usize] as usize - 1;
+    let next_candy_idx = candies[state.turn as usize + 1] as usize - 1;
+    return rule[now_candy_idx][next_candy_idx];
 }
 
-fn primitive_monteralro(time_keeper: &TimeKeeper, base_state: &State) -> Action {
-    let mut w = [0.; LEGAL_ACTIONS.len()];
-    loop {
-        if time_keeper.is_time_over() {
-            break;
+mod montecalro {
+    use super::{State, LEGAL_ACTIONS, random_action, rulebase_action, Action};
+    use super::time_keeper::TimeKeeper;
+
+    fn playout(state: &mut State) -> f64 {
+        while !state.is_done() {
+            state.random_update();
+            //state.advance(random_action(state));
+            state.advance(rulebase_action(state));
         }
-        for d in 0..LEGAL_ACTIONS.len() {
-            let mut state = base_state.clone();
-            state.advance(LEGAL_ACTIONS[d]);
-            w[d] += playout(&mut state);
-        }
+        state.get_score()
     }
-    let mut best_score = 0.;
-    let mut best_action_idx = 0usize;
-    for (d, wd) in w.iter().enumerate() {
-        if *wd > best_score { 
-            best_action_idx = d;
-            best_score = *wd;
+
+    pub fn primitive_monteralro(time_keeper: &TimeKeeper, base_state: &State) -> Action {
+        let mut w = [0.; LEGAL_ACTIONS.len()];
+        loop {
+            if time_keeper.is_time_over() {
+                break;
+            }
+            for d in 0..LEGAL_ACTIONS.len() {
+                let mut state = base_state.clone();
+                state.advance(LEGAL_ACTIONS[d]);
+                w[d] += playout(&mut state);
+            }
         }
+        let mut best_score = 0.;
+        let mut best_action_idx = 0usize;
+        for (d, wd) in w.iter().enumerate() {
+            if *wd > best_score { 
+                best_action_idx = d;
+                best_score = *wd;
+            }
+        }
+        LEGAL_ACTIONS[best_action_idx]
     }
-    LEGAL_ACTIONS[best_action_idx]
 }
 
 fn main() {
@@ -278,7 +300,8 @@ fn main() {
             pt: i64,
         }
         state.update(pt);
-        let action = primitive_monteralro(&time_keeper, &state);
+        let action = montecalro::primitive_monteralro(&time_keeper, &state);
+        // let action = rulebase_action(&state);
         println!("{}", action_to_char(action));
         std::io::stdout().flush().unwrap();
         state.advance(action);
