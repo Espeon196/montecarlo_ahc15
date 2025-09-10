@@ -64,6 +64,11 @@ pub static RAND_FOR_ACTION: Lazy<Mutex<StdRng>> = Lazy::new(|| {
     Mutex::new(StdRng::seed_from_u64(80))
 });
 
+const SIMULATION_MAX: usize = 14000;
+pub static RANDOM_FOR_SIMULATION: Lazy<Mutex<Vec<Vec<i64>>>> = Lazy::new(|| {
+    Mutex::new(vec![vec![0i64; END_TURN as usize]; SIMULATION_MAX])
+});
+
 
 #[derive(Clone, Copy)]
 pub enum Action {
@@ -157,6 +162,11 @@ impl State {
         self.update(p);
     }
 
+    pub fn simulation_update(&mut self, simulation_cnt: usize) {
+        let p = RANDOM_FOR_SIMULATION.lock().unwrap()[simulation_cnt][self.turn as usize];
+        self.update(p);
+    }
+
     pub fn update(&mut self, pt: i64) {
         let mut cnt = 0i64;
         let candies = FUTURE_CANDIES.lock().unwrap();
@@ -241,12 +251,14 @@ pub fn rulebase_action(state: &State) -> Action {
 }
 
 mod montecalro {
+    use crate::SIMULATION_MAX;
+
     use super::{State, LEGAL_ACTIONS, random_action, rulebase_action, Action};
     use super::time_keeper::TimeKeeper;
 
-    fn playout(state: &mut State) -> f64 {
+    fn playout(state: &mut State, simulation_cnt: usize) -> f64 {
         while !state.is_done() {
-            state.random_update();
+            state.simulation_update(simulation_cnt);
             //state.advance(random_action(state));
             state.advance(rulebase_action(state));
         }
@@ -255,14 +267,14 @@ mod montecalro {
 
     pub fn primitive_monteralro(time_keeper: &TimeKeeper, base_state: &State) -> Action {
         let mut w = [0.; LEGAL_ACTIONS.len()];
-        loop {
+        for simulation_cnt in 0..SIMULATION_MAX {
             if time_keeper.is_time_over() {
                 break;
             }
             for d in 0..LEGAL_ACTIONS.len() {
                 let mut state = base_state.clone();
                 state.advance(LEGAL_ACTIONS[d]);
-                w[d] += playout(&mut state);
+                w[d] += playout(&mut state, simulation_cnt);
             }
         }
         let mut best_score = 0.;
@@ -278,6 +290,18 @@ mod montecalro {
 }
 
 fn main() {
+    {
+        let mut rand_for_simulation = RANDOM_FOR_SIMULATION.lock().unwrap();
+        let mut rng = StdRng::seed_from_u64(0);
+        for simulation_cnt in 0..SIMULATION_MAX {
+            for turn in 0..END_TURN {
+                let remain_turn = END_TURN - turn;
+                let p = rng.gen_range(1..=remain_turn);
+                rand_for_simulation[simulation_cnt][turn as usize] = p;
+            }
+        }
+    }
+
     let mut source = LineSource::new(BufReader::new(std::io::stdin()));
     input! {
         from &mut source,
